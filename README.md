@@ -13,7 +13,7 @@ Project Structure
       - Artifact Registry API (to store Docker images)
 
   - Initial Configuration: 
-```
+```ruby
 export PROJECT_ID="[YOUR_GCP_PROJECT_ID]"
 export REGION_BE="europe-west1"
 export REGION_SY="australia-southeast1"
@@ -24,16 +24,16 @@ gcloud config set project ${PROJECT_ID}
 ```
 
 ## 2. GKE clusters setup
-#### Create the cluster in Belgium 
-```
+   a. Create the cluster in Belgium 
+```ruby
 gcloud container clusters create belgium-cluster \
     --region=${REGION_BE} \
     --num-nodes=1 \
     --machine-type=e2-medium \
     --workload-pool=${PROJECT_ID}.svc.id.goog
 ```
-#### Create the cluster in Sydney
-```
+   b. Create the cluster in Sydney
+```ruby
 gcloud container clusters create sydney-cluster \
     --region=${REGION_SY} \
     --num-nodes=1 \
@@ -41,14 +41,14 @@ gcloud container clusters create sydney-cluster \
     --workload-pool=${PROJECT_ID}.svc.id.goog
 ```
 
-#### Create service accounts and IAM bindings
-##### a. Create a GCP Service Account (GSA) for our app
-```
+## 3. Create service accounts and IAM bindings
+   a. Create a GCP Service Account (GSA) for our app
+```ruby
 gcloud iam service-accounts create ${GSA_NAME} \
     --display-name="Service Account for Benchmarking App"
 ```
-##### b. Grant the GSA the necessary Spanner role
-```
+   b. Grant the GSA the necessary Spanner role
+```ruby
 gcloud projects add-iam-policy-binding ${PROJECT_ID} \
     --member="serviceAccount:${GSA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
     --role="roles/cloudsql.client"
@@ -56,17 +56,17 @@ gcloud projects add-iam-policy-binding ${PROJECT_ID} \
     --member="serviceAccount:${GSA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
     --role="roles/spanner.databaseUser"
 ```
-##### c. Allow the KSA to impersonate the GSA
-```
+   c. Allow the KSA to impersonate the GSA
+```ruby
 gcloud iam service-accounts add-iam-policy-binding ${GSA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com \
     --role="roles/iam.workloadIdentityUser" \
     --member="serviceAccount:${PROJECT_ID}.svc.id.goog[default/${KSA_NAME}]"
 ```
 
-## 3. Database Setup
+## 4. Database Setup
 ### Part 1: CloudSQL
    a. Create a CloudSQL instance:
-```
+```ruby
 gcloud sql instances create pgsql-instance-belgium \
   --database-version=POSTGRES_16 \
   --edition=ENTERPRISE \
@@ -82,7 +82,7 @@ gcloud sql users set-password postgres \
 gcloud sql databases create latency_test_db --instance=pgsql-instance-belgium
 ```
   c. Create Data Schema:
-```
+```ruby
 CREATE TABLE product_catalog (
     product_id VARCHAR(36) PRIMARY KEY,
     product_name VARCHAR(255),
@@ -99,7 +99,7 @@ CREATE TABLE orders (
 );
 ```
   d. Insert dummy data:
-```
+```ruby
 INSERT INTO product_catalog (product_id, product_name, description, price)
 VALUES
 ('1', 'Laptop', 'High-performance laptop', 1200.50),
@@ -123,7 +123,7 @@ VALUES
 ('19', 'Pen Set', 'Set of 12 gel pens', 12.00),
 ('20', 'Stapler', 'Standard office stapler', 15.00);
 ```
-```
+```ruby
 INSERT INTO orders (order_id, product_id, quantity, order_date)
 VALUES
 ('45821', '1', 1, '2025-09-23T10:00:00Z'),
@@ -149,20 +149,20 @@ VALUES
 ```
 ### Part 2: Spanner
 a. Create Spanner instance: 
-```
+```ruby
 gcloud spanner instances create "spanner-instance-belgium" \
     --config=regional-${REGION_BE} \
     --processing-units=100 \
     --edition=STANDARD
 ```
 b. Create spanner database
-```
+```ruby
 gcloud spanner databases create "latency_test_db" \
     --instance="spanner-instance-belgium" \
     --database-dialect=POSTGRESQL
 ```
   c. Create Data Schema:
-```
+```ruby
 CREATE TABLE product_catalog (
     product_id   VARCHAR(36) NOT NULL,
     product_name VARCHAR(255),
@@ -180,7 +180,7 @@ CREATE TABLE orders (
 );
 ```
   d. Insert dummy data:
-```
+```ruby
 INSERT INTO product_catalog (product_id, product_name, description, price)
 VALUES
 ('1', 'Laptop', 'High-performance laptop', 1200.50),
@@ -204,7 +204,7 @@ VALUES
 ('19', 'Pen Set', 'Set of 12 gel pens', 12.00),
 ('20', 'Stapler', 'Standard office stapler', 15.00);
 ```
-```
+```ruby
 INSERT INTO orders (order_id, product_id, quantity, order_date)
 VALUES
 ('45821', '1', 1, '2025-09-23T10:00:00Z'),
@@ -229,7 +229,7 @@ VALUES
 ('25670', '14', 1, '2025-09-23T11:35:00Z');
 ```
 ### Part 3: GKE App (Node.js/TypeORM)
-#### 1. Setup Project Directory
+1. Setup Project Directory
 ```
 mkdir latency-app
 cd latency-app
@@ -237,7 +237,7 @@ npm init -y
 npm install express pg typeorm reflect-metadata
 npm install -D typescript @types/express @types/node ts-node nodemon
 ```
-#### 2. Create Application Files
+2. Create Application Files
 ```
 touch tsconfig.json .dockerignore Dockerfile
 mkdir src
@@ -411,27 +411,27 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 CMD ["node", "dist/index.js"]
 ```
-#### 3. Build and Push the Docker Image
-```
+3. Build and Push the Docker Image
+```ruby
 # Create a Docker repository in Artifact Registry
 gcloud artifacts repositories create benchmark-repo \
     --repository-format=docker \
     --location=${REGION_BE} \
     --description="Repo for latency test app"
 ```
-```
+```ruby
 # Configure Docker to authenticate with Artifact Registry
 gcloud auth configure-docker ${REGION_BE}-docker.pkg.dev
 ```
-```
+```ruby
 # Build and push the image using Cloud Build (easiest way)
 # This command uses the Dockerfile in your current directory
 gcloud builds submit --tag ${REGION_BE}-docker.pkg.dev/${PROJECT_ID}/benchmark-repo/latency-app:v1
 ```
 
-## 4. Deploy to GKE
+## 5. Deploy to GKE
 ### Test CloudSQL
-### 1. Kubernetes Secet for CloudSQL Password
+1. Kubernetes Secet for CloudSQL Password
 ```
 touch secret.yaml
 ```
@@ -446,7 +446,7 @@ stringData:
   password: "[THE_PASSWORD_YOU_CHOSE]"
   username: "postgres"
 ```
-### 2. Deployment for CloudSQL
+2. Deployment for CloudSQL
 ```
 touch deployment-cloudsql.yaml
 ```
@@ -515,26 +515,26 @@ spec:
     port: 80
     targetPort: 8080
 ```
-### 3. Deploy to Belgium and Sydney Clusters:
-#### a. get Sydney-cluster credentials:
+3. Deploy to Belgium and Sydney Clusters:
+   a. get Sydney-cluster credentials:
 ```
 gcloud container clusters get-credentials sydney-cluster --region australia-southeast1
 ```
-#### b. Deploy to Sydney:
-```
+   b. Deploy to Sydney:
+```ruby
 kubectl apply -f deployment-cloudsql.yaml
 ```
-#### c. Repeat for Belgium-cluster:
-```
+   c. Repeat for Belgium-cluster:
+```ruby
 gcloud container clusters get-credentials belgium-cluster --region europe-west1
 kubectl apply -f deployment-cloudsql.yaml
 ```
-#### c. To get Load Balancer IPs (You'll need this for testing):
-```
+   d. To get Load Balancer IPs (You'll need this for testing):
+```ruby
 kubectl get service latency-app-service-cloudsql
 ```
 ### Test Spanner (Sidecar deployment pattern)
-### 1. Deployment for Spanner with PGAdapter (Sidecar)
+1. Deployment for Spanner with PGAdapter (Sidecar)
 ```
 touch spanner-app-sidecar.yaml
 ```
@@ -598,9 +598,9 @@ spec:
     port: 80
     targetPort: 8080
 ```
-### 2. Deploy to Belgium and Sydney Clusters, and get the Load Balancer IP address
+2. Deploy to Belgium and Sydney Clusters, and get the Load Balancer IP address
 
-## 5. Create the Latency Test Script
+## 6. Create the Latency Test Script
 You can now run the latency test, create script on local machine to simulate the client workload.
 
 ```
