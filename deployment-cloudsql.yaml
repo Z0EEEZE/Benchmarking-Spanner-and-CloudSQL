@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: latency-app-deployment-cloudsql
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: latency-app-cloudsql
+  template:
+    metadata:
+      labels:
+        app: latency-app-cloudsql
+    spec:
+      serviceAccountName: benchmarking-ksa
+      containers:
+      - name: app
+        # Replace with your image path
+        image: ${REGION_BE}-docker.pkg.dev/${PROJECT_ID}/benchmark-repo/latency-app:v1
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+        env:
+          - name: DB_USER
+            valueFrom:
+              secretKeyRef:
+                name: cloudsql-db-credentials
+                key: username
+          - name: DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: cloudsql-db-credentials
+                key: password
+          - name: DB_NAME
+            value: "latency_test_db"
+          - name: DB_HOST
+            value: "127.0.0.1" # The app connects to the proxy on localhost
+          - name: DB_PORT
+            value: "5432"
+
+      # This is the Cloud SQL Auth Proxy sidecar container
+      - name: cloud-sql-proxy
+        image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.8.0
+        args:
+          # Replace with your Cloud SQL instance connection name
+          - "--structured-logs"
+          - "${PROJECT_ID}:${REGION_BE}:pgsql-instance-belgium"
+        securityContext:
+          runAsNonRoot: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: latency-app-service-cloudsql
+spec:
+  type: LoadBalancer
+  selector:
+    app: latency-app-cloudsql
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080
