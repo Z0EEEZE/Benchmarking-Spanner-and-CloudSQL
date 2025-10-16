@@ -30,6 +30,7 @@ gcloud container clusters create belgium-cluster \
     --region=${REGION_BE} \
     --num-nodes=1 \
     --machine-type=e2-medium \
+    --scopes=cloud-platform \
     --workload-pool=${PROJECT_ID}.svc.id.goog
 ```
    b. Create the cluster in Sydney
@@ -38,6 +39,7 @@ gcloud container clusters create sydney-cluster \
     --region=${REGION_SY} \
     --num-nodes=1 \
     --machine-type=e2-medium \
+    --scopes=cloud-platform \
     --workload-pool=${PROJECT_ID}.svc.id.goog
 ```
 
@@ -329,64 +331,72 @@ export const AppDataSource = new DataSource({
 ```ruby
 import express from 'express';
 import { AppDataSource } from './data-source';
-import { Product } from './entity/product';
-import { Order } from './entity/order';
+import { Product } from './entity/product'; 
+import { Order } from './entity/order';  
 
 const app = express();
 app.use(express.json());
 const PORT = process.env.PORT || 8080;
 
+// Initialize the database connection first
 AppDataSource.initialize()
     .then(() => {
+        // This block runs ONLY after the connection is successful
         console.log("Database connection established!");
+
+        // --- DEFINE ALL API ENDPOINTS HERE ---
+
+        // READ function: Get a product by its ID
+        app.get('/products/:id', async (req, res) => {
+            try {
+                const product = await Product.findOneBy({ product_id: req.params.id });
+                if (product) {
+                    res.json(product);
+                } else {
+                    res.status(404).send('Product not found');
+                }
+            } catch (err) {
+                console.error(err);
+                res.status(500).send('Server Error');
+            }
+        });
+
+        // WRITE function: Update an order's quantity
+        app.put('/orders/:id', async (req, res) => {
+            try {
+                const { quantity } = req.body;
+                if (typeof quantity !== 'number') {
+                    return res.status(400).send('Invalid quantity provided');
+                }
+                const order = await Order.findOneBy({ order_id: req.params.id });
+                if (order) {
+                    order.quantity = quantity;
+                    await order.save();
+                    res.json(order);
+                } else {
+                    res.status(404).send('Order not found');
+                }
+            } catch (err) {
+                console.error(err);
+                res.status(500).send('Server Error');
+            }
+        });
+
+        app.get('/health', (req, res) => {
+          res.status(200).send('OK');
+        });
+
+        // --- START THE SERVER LAST ---
+        // Now that the DB is connected and routes are set up, start the server.
+        app.listen(PORT, () => {
+            console.log(`Server is running on port ${PORT}`);
+        });
+
     })
-    .catch((error) => console.log("DB Error:", error));
-
-// READ function: Get a product by its ID
-app.get('/products/:id', async (req, res) => {
-    try {
-        const product = await Product.findOneBy({ product_id: req.params.id });
-        if (product) {
-            res.json(product);
-        } else {
-            res.status(404).send('Product not found');
-        }
-    } catch (err) {
-        console.error(err);
-        res.status(500).send('Server Error');
-    }
-});
-
-// WRITE function: Update an order's quantity
-app.put('/orders/:id', async (req, res) => {
-    try {
-        const { quantity } = req.body;
-        if (typeof quantity !== 'number') {
-            return res.status(400).send('Invalid quantity provided');
-        }
-
-        const order = await Order.findOneBy({ order_id: req.params.id });
-
-        if (order) {
-            order.quantity = quantity;
-            await order.save();
-            res.json(order);
-        } else {
-            res.status(404).send('Order not found');
-        }
-    } catch (err) {
-        console.error(err);
-        res.status(500).send('Server Error');
-    }
-});
-
-app.get('/health', (req, res) => {
-  res.status(200).send('OK');
-});
-
-app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-});
+    .catch((error) => {
+        // This block runs if the initial connection fails
+        console.error("DB Error: Could not connect to the database", error);
+    });
 ```
 >Dockerfile
 ```ruby
@@ -540,6 +550,16 @@ touch spanner-app-sidecar.yaml
 ```
 >spanner-app-sidecar.yaml
 ```ruby
+# 1. Kubernetes Service Account (KSA) with the critical annotation
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: benchmarking-ksa
+  annotations:
+    # This annotation links the KSA to your GSA for permissions
+    iam.gke.io/gcp-service-account: benchmarking-gsa@${PROJECT_ID}.iam.gserviceaccount.com
+---
+# 2. Deployment for your application and the sidecar
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -554,19 +574,23 @@ spec:
       labels:
         app: latency-app-spanner-sidecar
     spec:
+      # This tells the pod to use the KSA we defined above
       serviceAccountName: benchmarking-ksa
       containers:
       - name: app
         image: ${REGION_BE}-docker.pkg.dev/${PROJECT_ID}/benchmark-repo/latency-app:v1
-        command: ["/bin/sh", "-c"]
-        args: ["sleep 15 && node dist/index.js"]
         ports:
         - containerPort: 8080
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          failureThreshold: 30
+          periodSeconds: 10
         env:
           - name: DB_NAME
             value: "latency_test_db"
           - name: DB_HOST
-            # Connect to the sidecar on localhost
             value: "127.0.0.1"
           - name: DB_PORT
             value: "5432"
@@ -585,6 +609,7 @@ spec:
           - "-s"
           - "5432"
 ---
+# 3. LoadBalancer Service to expose the application
 apiVersion: v1
 kind: Service
 metadata:
@@ -597,6 +622,7 @@ spec:
   - protocol: TCP
     port: 80
     targetPort: 8080
+
 ```
 2. Deploy to Belgium and Sydney Clusters, and get the Load Balancer IP address
 
